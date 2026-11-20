@@ -107,10 +107,8 @@ function gitRoute(
       return;
     }
     const sections = decodeSections(body);
-    const firstLine =
-      sections[0]?.find((p) => p.kind === 'data')?.kind === 'data'
-        ? (sections[0].find((p) => p.kind === 'data') as { payload: Buffer }).payload.toString('utf8')
-        : '';
+    const firstPacket = sections[0]?.find((p) => p.kind === 'data');
+    const firstLine = firstPacket?.kind === 'data' ? firstPacket.payload.toString('utf8') : '';
     if (firstLine.startsWith('command=ls-refs')) {
       send(res, { status: 200, raw: lsRefs(repo, sections), contentType: 'application/x-git-upload-pack-result' });
       return;
