@@ -708,6 +708,7 @@ function resolveMutation(field: string, args: Record<string, unknown>, ctx: Exec
       return null;
     }
     issue.state = 'closed';
+    repo.mutationSeq += 1;
     return { kind: 'payload', payloadKind: 'closeIssue', entity: { kind: 'issue', repo, issue } } as GObj;
   }
   if (field === 'createPullRequest') {
@@ -755,6 +756,7 @@ function resolveMutation(field: string, args: Record<string, unknown>, ctx: Exec
       seq: nextSeq(),
     };
     issue.comments.push(comment);
+    repo.mutationSeq += 1;
     return { kind: 'payload', payloadKind: 'addComment', entity: { kind: 'commentEdge', comment } } as GObj;
   }
   ctx.errors.push({ message: `Field '${field}' doesn't exist on type 'Mutation'` });

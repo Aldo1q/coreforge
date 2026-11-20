@@ -24,7 +24,7 @@ import {
   fetchV0,
   receivePack,
 } from './gitproto.ts';
-import { decodeSections } from './util.ts';
+import { decodeSections, nextRequestId } from './util.ts';
 
 const SHOP_TOKEN = process.env.MAKEFUN_SHOP_TOKEN ?? '';
 const ENV_URL = (process.env.MAKEFUN_ENV_URL ?? '').replace(/\/+$/, '');
@@ -39,10 +39,16 @@ function authorized(req: IncomingMessage): boolean {
 
 function send(res: ServerResponse, reply: Reply): void {
   const headers: Record<string, string> = { ...(reply.headers ?? {}) };
+  if (headers['x-github-request-id'] === undefined) {
+    headers['x-github-request-id'] = nextRequestId();
+  }
   let body: Buffer;
   if (reply.raw !== undefined) {
     body = reply.raw;
     headers['content-type'] = reply.contentType ?? 'application/octet-stream';
+  } else if (reply.jsonText !== undefined) {
+    body = Buffer.from(reply.jsonText, 'utf8');
+    headers['content-type'] = reply.contentType ?? 'application/json';
   } else {
     body = Buffer.from(JSON.stringify(reply.json ?? {}), 'utf8');
     headers['content-type'] = reply.contentType ?? 'application/json';

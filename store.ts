@@ -26,6 +26,8 @@ export interface IssueRec {
   labels: string[];
   comments: CommentRec[];
   seq: number;
+  /** Serialized GET response cache, valid while repo.mutationSeq is unchanged. */
+  cachedJson?: { seq: number; text: string };
 }
 
 export interface PullRec {
@@ -55,6 +57,10 @@ export interface Repo {
   nextNumber: number;
   labels: Map<string, { name: string; color: string }>;
   seq: number;
+  /** Object ids whose full closure is known present in `objects` (prunes re-verification). */
+  verifiedClosure: Set<string>;
+  /** Bumped on every mutation that can change a serialized issue or label view. */
+  mutationSeq: number;
 }
 
 export interface Viewer {
@@ -111,11 +117,10 @@ export function createRepo(name: string, isPrivate: boolean, description: string
     nextNumber: 1,
     labels: new Map(),
     seq: nextSeq(),
+    verifiedClosure: new Set(),
+    mutationSeq: 0,
   };
   nextRepoId += 1;
-  for (const label of ['bug', 'enhancement', 'documentation', 'question', 'good first issue', 'help wanted']) {
-    repo.labels.set(label, { name: label, color: 'ededed' });
-  }
   repos.set(repoKey(repo.owner, name), repo);
   return repo;
 }
@@ -331,6 +336,27 @@ export function ancestors(repo: Repo, start: string): Map<string, number> {
 
 export function isAncestor(repo: Repo, maybeAncestor: string, of: string): boolean {
   return ancestors(repo, of).has(peel(repo, maybeAncestor));
+}
+
+/**
+ * Whether `ancestor` is reachable from `descendant` through parent links,
+ * stopping the moment it is found. A fast-forward push finds its old tip one
+ * step down, so this stays O(1) where the full ancestor walk is O(history).
+ */
+export function hasAncestor(repo: Repo, descendant: string, ancestor: string): boolean {
+  const target = peel(repo, ancestor);
+  const seen = new Set<string>();
+  const stack = [peel(repo, descendant)];
+  while (stack.length > 0) {
+    const oid = stack.pop()!;
+    if (oid === target) return true;
+    if (seen.has(oid)) continue;
+    seen.add(oid);
+    const obj = repo.objects.get(oid);
+    if (!obj || obj.type !== 'commit') continue;
+    for (const parent of parseCommit(obj.data).parents) stack.push(parent);
+  }
+  return false;
 }
 
 /** The best common ancestor of two commits, or null. */

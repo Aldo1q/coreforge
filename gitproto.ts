@@ -7,7 +7,7 @@ import { deflateSync, inflateSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { pktLine, PKT_FLUSH, PKT_DELIM, decodePkts, ZERO_OID, isOid } from './util.ts';
 import type { Pkt } from './util.ts';
-import { parseCommit, parseTree, parseTag, peel, ancestors } from './store.ts';
+import { parseCommit, parseTree, parseTag, peel, hasAncestor } from './store.ts';
 import type { Repo, GitObjectType } from './store.ts';
 
 const AGENT = 'coreforge/1.0';
@@ -405,14 +405,19 @@ function selectFetchObjects(
 /** Check that every object referenced from a tip is present in the store. */
 export function closureComplete(repo: Repo, tip: string): boolean {
   const seen = new Set<string>();
+  const verifiedCommits: string[] = [];
   const stack = [tip];
   while (stack.length > 0) {
     const oid = stack.pop()!;
     if (seen.has(oid)) continue;
     seen.add(oid);
+    // A subtree whose closure was verified by an earlier push never changes
+    // (objects are immutable and never deleted), so it needs no re-walk.
+    if (repo.verifiedClosure.has(oid)) continue;
     const obj = repo.objects.get(oid);
     if (!obj) return false;
     if (obj.type === 'commit') {
+      verifiedCommits.push(oid);
       const info = parseCommit(obj.data);
       stack.push(info.tree, ...info.parents);
     } else if (obj.type === 'tree') {
@@ -421,6 +426,8 @@ export function closureComplete(repo: Repo, tip: string): boolean {
       stack.push(parseTag(obj.data).target);
     }
   }
+  for (const oid of verifiedCommits) repo.verifiedClosure.add(oid);
+  repo.verifiedClosure.add(tip);
   return true;
 }
 
@@ -711,7 +718,7 @@ export function receivePack(repo: Repo, body: Buffer): Buffer {
       const oldObj = repo.objects.get(oldCommit);
       const newObj = repo.objects.get(newCommit);
       if (oldObj?.type === 'commit' && newObj?.type === 'commit') {
-        if (!ancestors(repo, newCommit).has(oldCommit)) {
+        if (!hasAncestor(repo, newCommit, oldCommit)) {
           fail('non-fast-forward');
           continue;
         }

@@ -4,6 +4,8 @@
 
 import {
   VIEWER,
+  repos,
+  repoKey,
   getRepo,
   createRepo,
   listRepos,
@@ -28,6 +30,8 @@ import { isOid, nextRequestId } from './util.ts';
 export interface Reply {
   status: number;
   json?: unknown;
+  /** Pre-serialized JSON body (cache hits); used verbatim when present. */
+  jsonText?: string;
   headers?: Record<string, string>;
   raw?: Buffer;
   contentType?: string;
@@ -107,6 +111,7 @@ export function createIssue(repo: Repo, title: string, body: string, labels: str
   };
   repo.nextNumber += 1;
   repo.issues.set(issue.number, issue);
+  repo.mutationSeq += 1;
   return issue;
 }
 
@@ -397,7 +402,27 @@ function route(ctx: Ctx): Reply {
   if (!repo) return err(404, 'Not Found');
   const rest = segments.slice(3);
 
-  if (rest.length === 0 && method === 'GET') return { status: 200, json: repoJson(repo) };
+  if (rest.length === 0) {
+    if (method === 'GET') return { status: 200, json: repoJson(repo) };
+    if (method === 'PATCH') {
+      if (typeof b.description === 'string') repo.description = b.description;
+      if (typeof b.private === 'boolean') repo.isPrivate = b.private;
+      if (typeof b.default_branch === 'string' && b.default_branch !== '') repo.defaultBranch = b.default_branch;
+      if (typeof b.name === 'string' && b.name !== '' && b.name !== repo.name) {
+        if (getRepo(repo.owner, b.name)) return err(422, 'Validation Failed: name already exists on this account');
+        repos.delete(repoKey(repo.owner, repo.name));
+        repo.name = b.name;
+        repos.set(repoKey(repo.owner, repo.name), repo);
+      }
+      repo.mutationSeq += 1;
+      return { status: 200, json: repoJson(repo) };
+    }
+    if (method === 'DELETE') {
+      repos.delete(repoKey(repo.owner, repo.name));
+      return { status: 204, raw: Buffer.alloc(0) };
+    }
+    return err(404, 'Not Found');
+  }
 
   // Contents
   if (rest[0] === 'contents') {
@@ -473,6 +498,7 @@ function route(ctx: Ctx): Reply {
       if (name === '') return err(422, 'Validation Failed: name is required');
       if (repo.labels.has(name)) return err(422, 'Validation Failed: label already exists');
       repo.labels.set(name, { name, color });
+      repo.mutationSeq += 1;
       return { status: 201, json: { name, color, default: false } };
     }
   }
@@ -506,7 +532,14 @@ function route(ctx: Ctx): Reply {
     const pull = repo.pulls.get(number);
     if (rest.length === 2) {
       if (method === 'GET') {
-        if (issue) return { status: 200, json: issueJson(repo, issue) };
+        if (issue) {
+          if (issue.cachedJson && issue.cachedJson.seq === repo.mutationSeq) {
+            return { status: 200, jsonText: issue.cachedJson.text };
+          }
+          const text = JSON.stringify(issueJson(repo, issue));
+          issue.cachedJson = { seq: repo.mutationSeq, text };
+          return { status: 200, jsonText: text };
+        }
         if (pull) {
           return {
             status: 200,
@@ -534,6 +567,7 @@ function route(ctx: Ctx): Reply {
         if (Array.isArray(b.labels)) {
           issue.labels = b.labels.filter((x): x is string => typeof x === 'string');
         }
+        repo.mutationSeq += 1;
         return { status: 200, json: issueJson(repo, issue) };
       }
     }
@@ -556,6 +590,7 @@ function route(ctx: Ctx): Reply {
         if (!issue) return err(404, 'Not Found');
         const comment = { id: allocCommentId(), body: typeof b.body === 'string' ? b.body : '', seq: nextSeq() };
         issue.comments.push(comment);
+        repo.mutationSeq += 1;
         return {
           status: 201,
           json: {
